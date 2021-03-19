@@ -246,11 +246,11 @@ def complete(data):
     logging.info('创建补全映射')
     vendor_map, manufacturer_map, mca_id_map, delete_set = complete_map(data)
     logging.info('进行补全映射')
-    data['mca_id'] = data.apply(
+    data['mca_id'] = data.parallel_apply(
         complete_mca_id, axis=1, args=(mca_id_map,))
-    data['vendor'] = data.apply(
+    data['vendor'] = data.parallel_apply(
         complete_vendor, axis=1, args=(vendor_map,))
-    data['manufacturer'] = data.apply(
+    data['manufacturer'] = data.parallel_apply(
         complete_manufacturer, axis=1, args=(manufacturer_map,))
 
     return data
@@ -258,29 +258,44 @@ def complete(data):
 
 def error_match(data, data_failure):
 
-    def error_mapping(item, failure_time, failure_tag):
+    # def error_mapping(item, failure_time, failure_tag):
 
-        serial_number = item.serial_number
-        logging.debug('对服务器{0}进行故障检查'.format(serial_number))
-        if serial_number in failure_time:
-            logging.info('服务器：{0}；报错时间：{1}；报错类型：{2}'.format(serial_number, failure_time[serial_number], failure_tag[serial_number]))
-            return failure_time[serial_number], failure_tag[serial_number]
-        return None, None
+    #     serial_number = item.serial_number
+    #     logging.debug('对服务器{0}进行故障检查'.format(serial_number))
+    #     if serial_number in failure_time:
+    #         logging.info('服务器：{0}；报错时间：{1}；报错类型：{2}'.format(serial_number, failure_time[serial_number], failure_tag[serial_number]))
+    #         return failure_time[serial_number], failure_tag[serial_number]
+    #     return None, None
+
 
     logging.info('创建故障映射...')
-    failuretime_map = dict()
-    failuretag_map = dict()
-
+    failuretime_map = {}
+    failuretag_map = {}
     for i in range(data_failure.shape[0]):  # server到故障的映射关系
         failuretime_map[data_failure.loc[i, 'serial_number']
                         ] = data_failure.loc[i, 'failure_time']
         failuretag_map[data_failure.loc[i, 'serial_number']
                        ] = data_failure.loc[i, 'tag']
+    data.insert(loc=data.shape[1], column='failure_time', value=['' for i in range(data.shape[0])])
+    data.insert(loc=data.shape[1], column='failure_tag', value=['' for i in range(data.shape[0])])
+    data.insert(loc=data.shape[1], column='interval', value=['' for i in range(data.shape[0])])
+    
+    logging.info('进行故障映射...')   
 
-    logging.info('进行故障映射...')
-    # data[['failure_time', 'failure_tag']] = data.apply(lambda item: error_mapping(item['serial_number'], failuretime_map, failuretag_map))
-    data[['failure_time', 'failure_tag']] = data.apply(
-        error_mapping, axis=1, args=(failuretime_map,failuretag_map,))
+    for server in failuretime_map.keys():
+        if server in data.serial_number.values:
+            data.loc[data.serial_number == server,'failure_time'] = failuretime_map[server]
+            data.loc[data.serial_number == server,'failure_tag'] = failuretag_map[server]
+            logging.info('正在进行{0}故障映射'.format(server))
+        else:
+            logging.info('故障服务器{0}不在训练集里'.format(server))
+    # data[['failure_time', 'failure_tag']] = data.parallel_apply(lambda item: error_mapping(item['serial_number'], failuretime_map, failuretag_map))
+    # data[['failure_time', 'failure_tag']] = data.parallel_apply(
+    #     error_mapping, axis=1, args=(failuretime_map,failuretag_map,))
+
+    data.loc[:,'collect_time'] = pd.to_datetime(data.collect_time)
+    data.loc[:,'failure_time'] = pd.to_datetime(data.failure_time)
+    data.interval = data.failure_time - data.collect_time
 
     return data
 
@@ -289,12 +304,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Data Preprocess')
     parser.add_argument('--mode', type=str, default='train')
-    parser.add_argument('--num_row', type=int, default=200)
-    parser.add_argument('--num_col', type=int, default=20)
+    parser.add_argument('--num_row', type=int, default=2000)
+    parser.add_argument('--num_col', type=int, default=50)
     parser.add_argument('--num_format', type=int, default=20)
     args = parser.parse_args()
 
-    pandarallel.initialize()  # pandas并行加速数据处理
+    pandarallel.initialize(nb_workers=16)  # pandas并行加速数据处理
     matplotlib.rcParams.update({'font.size': 20})
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)  # Log等级总开关
@@ -311,7 +326,7 @@ if __name__ == '__main__':
     logger.addHandler(screenlog)
 
 
-    if not 'data_{0}_merge.hdf5'.format(args.mode) in os.listdir():
+    if not 'data_{0}_merge.csv'.format(args.mode) in os.listdir():
 
         data_mce = pd.read_csv(
             'memory_sample_mce_log_round1_a_{0}.csv'.format(args.mode))
@@ -327,23 +342,35 @@ if __name__ == '__main__':
         # 没有重复条目，说明每个server只有一次异常
 
         data = merge(data_mce, data_add, data_kernel)
-        data.to_hdf('data_{0}_merge.hdf5'.format(args.mode), key='data', complib='zlib', complevel=9)
+        data = data.infer_objects()
 
-    data = pd.read_hdf('data_{0}_merge.hdf5'.format(args.mode), key='data')
-    data = data.infer_objects()
-    logging.info(data.dtypes)
+        if args.mode == 'train':
+            data_failure = pd.read_csv(
+                'memory_sample_failure_tag_round1_a_train.csv')
+            data_failure = drop_dups(data_failure, ['serial_number'])
+            data = error_match(data, data_failure)
+            logging.info('完成报错映射，更新数据')
+            logging.info('数据已更新')
+        data.to_csv('data_{0}_merge.csv'.format(args.mode), index=0)
 
-    if args.mode == 'train':
-        data_failure = pd.read_csv(
-            'memory_sample_failure_tag_round1_a_train.csv')
-        data_failure = drop_dups(data_failure, ['serial_number'])
-        data = error_match(data, data_failure)
+    if not 'data_{0}_comp.csv'.format(args.mode) in os.listdir():
 
-    data = complete(data)
+        data_loader = pd.read_csv('data_{0}_merge.csv'.format(args.mode), chunksize=10e6)
+
+        for idx, data in enumerate(data_loader):
+
+            data = complete(data)
+
+        if idx == 0:
+            data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='w', index=0)
+        else:
+            data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='a', header=0, index=0)
+
+    data = pd.read_csv('data_{0}_comp.csv'.format(args.mode))
     data.drop(labels=['manufacturer_add', 'vendor_add',
-                      'manufacturer_kernel', 'vendor_kernel'], axis=1, inplace=True)  # 删去冗余补全行
+                'manufacturer_kernel', 'vendor_kernel'], axis=1, inplace=True)  # 删去冗余补全行
     data = process_address(data, save_num_col=args.num_col,
                            save_num_row=args.num_row)  # 处理address数据，主要是内存地址的稀疏化
     data = process_kernel(data, save_num=args.num_format)
     data = drop_dups(data, ['serial_number', 'collect_time','mca_id','row', 'col', 'rankid', 'memory']) # 最后去重
-    data.to_hdf('data_{0}_final.hdf5'.format(args.mode), complib='zlib', complevel=9)
+    data.to_csv('data_{0}_final.csv'.format(args.mode))
