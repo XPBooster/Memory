@@ -293,9 +293,9 @@ def error_match(data, data_failure):
     # data[['failure_time', 'failure_tag']] = data.parallel_apply(
     #     error_mapping, axis=1, args=(failuretime_map,failuretag_map,))
 
-    data.loc[:,'collect_time'] = pd.to_datetime(data.collect_time)
-    data.loc[:,'failure_time'] = pd.to_datetime(data.failure_time)
-    data.interval = data.failure_time - data.collect_time
+    # data.loc[:,'collect_time'] = pd.to_datetime(data.collect_time)
+    # data.loc[:,'failure_time'] = pd.to_datetime(data.failure_time)
+    # data.interval = data.failure_time - data.collect_time
 
     return data
 
@@ -304,8 +304,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Data Preprocess')
     parser.add_argument('--mode', type=str, default='train')
-    parser.add_argument('--num_row', type=int, default=2000)
-    parser.add_argument('--num_col', type=int, default=50)
+    parser.add_argument('--num_row', type=int, default=20000)
+    parser.add_argument('--num_col', type=int, default=100)
     parser.add_argument('--num_format', type=int, default=20)
     args = parser.parse_args()
 
@@ -358,9 +358,7 @@ if __name__ == '__main__':
         data_loader = pd.read_csv('data_{0}_merge.csv'.format(args.mode), chunksize=10e6)
 
         for idx, data in enumerate(data_loader):
-
             data = complete(data)
-
         if idx == 0:
             data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='w', index=0)
         else:
