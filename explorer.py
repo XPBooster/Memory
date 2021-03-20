@@ -62,6 +62,14 @@ def process_kernel(df, save_num):
 
     return df
 
+def _kernel_map():
+    idx = 0
+    kernel_map = {}
+    for item in data_kernel.columns.values:
+        if not item in {'collect_time', 'serial_number', 'manufacturer', 'vendor'}:
+            kernel_map[item] = 'e{0}'.format(idx)
+            idx+=1
+    return kernel_map
 
 def process_address(df, save_num_col, save_num_row):
 
@@ -307,9 +315,10 @@ if __name__ == '__main__':
     parser.add_argument('--num_row', type=int, default=20000)
     parser.add_argument('--num_col', type=int, default=100)
     parser.add_argument('--num_format', type=int, default=20)
+    parser.add_argument('--threads', type=int, default=36)
     args = parser.parse_args()
 
-    pandarallel.initialize(nb_workers=16)  # pandas并行加速数据处理
+    pandarallel.initialize(nb_workers=args.threads)  # pandas并行加速数据处理
     matplotlib.rcParams.update({'font.size': 20})
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)  # Log等级总开关
@@ -332,6 +341,7 @@ if __name__ == '__main__':
             'memory_sample_mce_log_round1_a_{0}.csv'.format(args.mode))
         data_kernel = pd.read_csv(
             'memory_sample_kernel_log_round1_a_{0}.csv'.format(args.mode))
+        data_kernel.rename(columns=_kernel_map(), inplace=True)
         data_add = pd.read_csv(
             'memory_sample_address_log_round1_a_{0}.csv'.format(args.mode))
         data_mce = drop_dups(
@@ -345,6 +355,7 @@ if __name__ == '__main__':
         data = data.infer_objects()
 
         if args.mode == 'train':
+
             data_failure = pd.read_csv(
                 'memory_sample_failure_tag_round1_a_train.csv')
             data_failure = drop_dups(data_failure, ['serial_number'])
@@ -352,17 +363,21 @@ if __name__ == '__main__':
             logging.info('完成报错映射，更新数据')
             logging.info('数据已更新')
         data.to_csv('data_{0}_merge.csv'.format(args.mode), index=0)
+        logging.info('更新数据已写入')
 
+## 不一定使用,用分类器那边的数据处理做 ##
     if not 'data_{0}_comp.csv'.format(args.mode) in os.listdir():
 
         data_loader = pd.read_csv('data_{0}_merge.csv'.format(args.mode), chunksize=10e6)
-
+        idx = 0
         for idx, data in enumerate(data_loader):
             data = complete(data)
-        if idx == 0:
-            data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='w', index=0)
-        else:
-            data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='a', header=0, index=0)
+            if idx == 0:
+                data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='w', index=0)
+            else:
+                data.to_csv('data_{0}_comp.csv'.format(args.mode), mode='a', header=0, index=0)
+            logging.info('已写入第{0}批补全数据'.format(idx))
+            idx += 1
 
     data = pd.read_csv('data_{0}_comp.csv'.format(args.mode))
     data.drop(labels=['manufacturer_add', 'vendor_add',
